@@ -1,7 +1,12 @@
+"""Transformer module unit tests.
+
+Launch command: python -m unittest modules.model_test
+"""
+
 import unittest
 import torch
 import torch.nn as nn
-import model
+from . import model
 
 ATOL = 1e-6
 
@@ -43,12 +48,12 @@ class TestModel(unittest.TestCase):
 
   def test_encoder(self):
     bs, src_len = 3, 5
-    num_block = 2
+    num_blocks = 2
     embed_dim, num_heads, ffn_dim = 8, 2, 4
     dropout_prob, layer_norm_eps = 0.1, 1e-5
     
     my_module = model.TransformerEncoder(
-        num_block,
+        num_blocks,
         embed_dim, num_heads, ffn_dim,
         dropout_prob=dropout_prob,
         layer_norm_eps=layer_norm_eps,
@@ -59,25 +64,25 @@ class TestModel(unittest.TestCase):
         layer_norm_eps=layer_norm_eps,
         batch_first=True,
     )
-    gt_module = nn.TransformerEncoder(gt_layer, num_block)
+    gt_module = nn.TransformerEncoder(gt_layer, num_blocks)
     
     self._match_params(my_module, gt_module)
     my_module.eval()
     gt_module.eval()
 
-    src = torch.rand((bs, src_len, embed_dim))
+    src = torch.rand(bs, src_len, embed_dim)
     my_out = my_module(src)
     gt_out = gt_module(src)
     torch.testing.assert_close(my_out, gt_out, atol=ATOL, rtol=0)
 
   def test_decoder(self):
     bs, src_len, tgt_len = 3, 5, 7
-    num_block = 2
+    num_blocks = 2
     embed_dim, num_heads, ffn_dim = 8, 2, 4
     dropout_prob, layer_norm_eps = 0.1, 1e-5
     
     my_module = model.TransformerDecoder(
-        num_block,
+        num_blocks,
         embed_dim, num_heads, ffn_dim,
         dropout_prob=dropout_prob,
         layer_norm_eps=layer_norm_eps,
@@ -88,28 +93,28 @@ class TestModel(unittest.TestCase):
         layer_norm_eps=layer_norm_eps,
         batch_first=True,
     )
-    gt_module = nn.TransformerDecoder(gt_layer, num_block)
+    gt_module = nn.TransformerDecoder(gt_layer, num_blocks)
     
     self._match_params(my_module, gt_module, match_mhca=True)
   
     my_module.eval()
     gt_module.eval()
 
-    memory = torch.rand((bs, src_len, embed_dim))
-    tgt = torch.rand((bs, tgt_len, embed_dim))
+    memory = torch.rand(bs, src_len, embed_dim)
+    tgt = torch.rand(bs, tgt_len, embed_dim)
     my_out = my_module(tgt, memory)
     gt_out = gt_module(tgt, memory)
     torch.testing.assert_close(my_out, gt_out, atol=ATOL, rtol=0)
 
   def test_transformer(self):
     bs, src_len, tgt_len = 3, 5, 7
-    num_encoder_block, num_decoder_block = 2, 2
+    num_encoder_blocks, num_decoder_blocks = 2, 2
     embed_dim, num_heads, ffn_dim = 8, 2, 4
     dropout_prob, layer_norm_eps = 0.1, 1e-5
 
     my_module = model.Transformer(
-        num_encoder_block,
-        num_decoder_block,
+        num_encoder_blocks,
+        num_decoder_blocks,
         embed_dim,
         num_heads,
         ffn_dim,
@@ -128,7 +133,7 @@ class TestModel(unittest.TestCase):
         layer_norm_eps=layer_norm_eps,
         batch_first=True,
     )
-    gt_encoder = nn.TransformerEncoder(gt_encoder_layer, num_encoder_block)
+    gt_encoder = nn.TransformerEncoder(gt_encoder_layer, num_encoder_blocks)
     gt_decoder_layer = nn.TransformerDecoderLayer(
         embed_dim,
         num_heads,
@@ -137,12 +142,12 @@ class TestModel(unittest.TestCase):
         layer_norm_eps=layer_norm_eps,
         batch_first=True,
     )
-    gt_decoder = nn.TransformerDecoder(gt_decoder_layer, num_encoder_block)
+    gt_decoder = nn.TransformerDecoder(gt_decoder_layer, num_encoder_blocks)
     gt_module = nn.Transformer(
         d_model=embed_dim,
         nhead=num_heads,
-        num_encoder_layers=num_encoder_block,
-        num_decoder_layers=num_decoder_block,
+        num_encoder_layers=num_encoder_blocks,
+        num_decoder_layers=num_decoder_blocks,
         batch_first=True,
         custom_encoder=gt_encoder,
         custom_decoder=gt_decoder,
@@ -154,15 +159,50 @@ class TestModel(unittest.TestCase):
     my_module.eval()
     gt_module.eval()
 
-    src = torch.rand((bs, src_len, embed_dim))
-    tgt = torch.rand((bs, tgt_len, embed_dim))
-    tgt_mask = torch.triu(
-      torch.ones(tgt_len, tgt_len, dtype=torch.bool), diagonal=1
+    src = torch.rand(bs, src_len, embed_dim)
+    tgt = torch.rand(bs, tgt_len, embed_dim)
+    causal_mask = torch.triu(
+        torch.ones(tgt_len, tgt_len, dtype=torch.bool), diagonal=1
     )
-    my_out = my_module(src, tgt, tgt_mask=tgt_mask)
-    gt_out = gt_module(src, tgt, tgt_mask=tgt_mask)
-    torch.testing.assert_close(my_out, gt_out, atol=ATOL, rtol=0)
-
+    
+    with self.subTest('without_a_mask'):
+      my_out = my_module(src, tgt)
+      gt_out = gt_module(src, tgt)
+      torch.testing.assert_close(my_out, gt_out, atol=ATOL, rtol=0)
+    
+    with self.subTest('with_a_casual_mask'):
+      my_out = my_module(src, tgt, tgt_sa_mask=causal_mask)
+      gt_out = gt_module(src, tgt, tgt_mask=causal_mask)
+      torch.testing.assert_close(my_out, gt_out, atol=ATOL, rtol=0)
+      
+    with self.subTest('with_causal_and_padding_masks'):
+      src_padding_mask = torch.rand(bs, src_len) > 0.5
+      tgt_padding_mask = torch.rand(bs, tgt_len) > 0.5
+      # At least one position is not masked out.
+      src_padding_mask[:, 0] = False
+      tgt_padding_mask[:, 0] = False
+      # Merge with the casual mask and expand out the head dimension.
+      sa_mask = (tgt_padding_mask[:, None] | causal_mask).unsqueeze(1)
+      ca_mask = src_padding_mask[:, None, None]
+      
+      my_out = my_module(
+          src,
+          tgt,
+          src_mask=ca_mask,
+          tgt_sa_mask=sa_mask,
+          tgt_ca_mask=ca_mask,
+      )
+      gt_out = gt_module(
+        src,
+        tgt,
+        src_key_padding_mask=src_padding_mask,
+        memory_key_padding_mask=src_padding_mask,
+        tgt_mask=causal_mask,
+        tgt_is_causal=True,
+        tgt_key_padding_mask=tgt_padding_mask,
+      )
+      torch.testing.assert_close(my_out, gt_out, atol=ATOL, rtol=0)
+      
 
 if __name__ == '__main__':
   unittest.main()

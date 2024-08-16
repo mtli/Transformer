@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-import attention
+from . import attention
 
 
 class EncoderBlock(nn.Module):
@@ -25,8 +25,12 @@ class EncoderBlock(nn.Module):
     self.dropout1 = nn.Dropout(dropout_prob, inplace=True)
     self.dropout2 = nn.Dropout(dropout_prob, inplace=True)
     
-  def forward(self, x: torch.Tensor) -> torch.Tensor:
-    x = x + self.dropout1(self.self_attn(x, x, x))
+  def forward(
+    self,
+    x: torch.Tensor,
+    attn_mask: torch.Tensor | None = None,
+  ) -> torch.Tensor:
+    x = x + self.dropout1(self.self_attn(x, x, x, attn_mask=attn_mask))
     x = self.norm1(x)
     x = x + self.dropout2(self.ffn(x))
     x = self.norm2(x)
@@ -60,11 +64,12 @@ class DecoderBlock(nn.Module):
   def forward(
     self,
     x: torch.Tensor, y: torch.Tensor,
-    attn_mask: torch.Tensor | None = None
+    sa_mask: torch.Tensor | None = None,
+    ca_mask: torch.Tensor | None = None,
   ) -> torch.Tensor:
-    x = x + self.dropout1(self.self_attn(x, x, x, attn_mask=attn_mask))
+    x = x + self.dropout1(self.self_attn(x, x, x, attn_mask=sa_mask))
     x = self.norm1(x)
-    x = x + self.dropout2(self.cross_attn(x, y, y))
+    x = x + self.dropout2(self.cross_attn(x, y, y, attn_mask=ca_mask))
     x = self.norm2(x)
     x = x + self.dropout3(self.ffn(x))
     x = self.norm3(x)

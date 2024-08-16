@@ -47,13 +47,10 @@ class MultiHeadAttention(nn.Module):
     b, n, _ = x.shape
     x = x.view(b, n, self.num_heads, self.dim_per_head)
     x = x.transpose(1, 2).contiguous()
-    x = x.view(b*self.num_heads, n, self.dim_per_head)
     return x
   
   def merge_heads(self, x: torch.Tensor) -> torch.Tensor:
-    bh, n, _ = x.shape
-    b = bh // self.num_heads
-    x = x.view(b, self.num_heads, n, self.dim_per_head)
+    b, _, n, _ = x.shape
     x = x.transpose(1, 2).contiguous()
     x = x.view(b, n, self.embed_dim)
     return x
@@ -67,16 +64,16 @@ class MultiHeadAttention(nn.Module):
   ) -> torch.Tensor:
     # x: [B, M/N, E]
 
-    # q/k/v: [B*H, M/N, F]  (E = H*F)
+    # q/k/v: [B, H, M/N, F]  (E = H*F)
     q = self.split_heads(self.to_q(xq))
     k = self.split_heads(self.to_k(xk))
     v = self.split_heads(self.to_v(xv))
     
-    # dot: [B*H, M, N]
+    # dot: [B, H, M, N]
     dot = self.scaling*(q @ k.mT)
     if attn_mask is not None:
       dot.masked_fill_(attn_mask, -torch.inf)
-    # attn: [B*H, M, N]
+    # attn: [B, H, M, N]
     attn = F.softmax(dot, -1)
     # out: [B, M, E]
     out = self.merge_heads(attn @ v)
