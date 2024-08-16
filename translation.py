@@ -43,7 +43,7 @@ UNK_IDX, PAD_IDX, BOS_IDX, EOS_IDX = 0, 1, 2, 3
 special_symbols = ['<unk>', '<pad>', '<bos>', '<eos>']
   
   
-def preprocess() -> tuple[int, int, Callable]:
+def preprocess() -> tuple:
   token_transform = {
     SRC_LANGUAGE: get_tokenizer('spacy', language='de_core_news_sm'),
     TGT_LANGUAGE: get_tokenizer('spacy', language='en_core_web_sm'),
@@ -97,12 +97,9 @@ def preprocess() -> tuple[int, int, Callable]:
     tgt_batch = pad_sequence(tgt_batch, padding_value=PAD_IDX)
     return src_batch, tgt_batch
 
-  return (
-    len(vocab_transform[SRC_LANGUAGE]),
-    len(vocab_transform[TGT_LANGUAGE]),
-    collate_fn,
-  )
-    
+  return text_transform, vocab_transform, collate_fn
+
+
 def generate_square_subsequent_mask(sz):
   mask = (torch.triu(torch.ones((sz, sz))) == 1).transpose(0, 1)
   mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
@@ -157,7 +154,7 @@ class Seq2SeqTransformer(nn.Module):
           # Init the weights (not the bias) in all the linear layers.
           nn.init.xavier_uniform_(p)
       
-  def _create_mask(self, x: torch.Tensor, is_causal=False):
+  def create_mask(self, x: torch.Tensor, is_causal=False):
     seq_len = x.shape[1]
     mask = (x == PAD_IDX)[:, None, None]
     if is_causal:
@@ -168,8 +165,8 @@ class Seq2SeqTransformer(nn.Module):
     return mask
 
   def forward(self, src: torch.Tensor, tgt: torch.Tensor) -> torch.Tensor:
-    src_padding_mask = self._create_mask(src)
-    tgt_sa_mask = self._create_mask(tgt, is_causal=True)
+    src_padding_mask = self.create_mask(src)
+    tgt_sa_mask = self.create_mask(tgt, is_causal=True)
     src_emb = self.positional_encoding(self.src_tok_emb(src))
     tgt_emb = self.positional_encoding(self.tgt_tok_emb(tgt))
     outs = self.transformer(
@@ -181,12 +178,20 @@ class Seq2SeqTransformer(nn.Module):
     )
     return self.generator(outs)
 
-  def encode(self, src: torch.Tensor, src_mask: torch.Tensor):
-    return self.transformer.encoder(self.positional_encoding(
-              self.src_tok_emb(src)), src_mask)
+  def encode(
+      self,
+      src: torch.Tensor,
+      src_mask: torch.Tensor | None = None,
+  ) -> torch.Tensor:
+    src_emb = self.positional_encoding(self.src_tok_emb(src))
+    return self.transformer.encoder(src_emb, src_mask)
 
-  def decode(self, tgt: torch.Tensor, memory: torch.Tensor, tgt_mask: torch.Tensor):
-    return self.transformer.decoder(self.positional_encoding(
-              self.tgt_tok_emb(tgt)), memory,
-              tgt_mask)
-  
+  def decode(
+      self,
+      tgt: torch.Tensor,
+      memory: torch.Tensor,
+      tgt_sa_mask: torch.Tensor | None = None,
+      tgt_ca_mask: torch.Tensor | None = None,
+  ) -> torch.Tensor:
+    tgt_emb = self.positional_encoding(self.tgt_tok_emb(tgt))
+    return self.transformer.decoder(tgt_emb, memory, tgt_sa_mask, tgt_ca_mask)

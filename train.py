@@ -66,14 +66,14 @@ def evaluate(val_dataloader, model, loss_fn, device):
 def train(device: torch.DeviceObjType):  
   train_iter = Multi30k(split='train', language_pair=(SRC_LANGUAGE, TGT_LANGUAGE))
   val_iter = Multi30k(split='valid', language_pair=(SRC_LANGUAGE, TGT_LANGUAGE))
-  src_vocab_size, tgt_vocab_size, collate_fn = translation.preprocess()
+  _, vocab_transform, collate_fn = translation.preprocess()
   train_dataloader = DataLoader(train_iter, batch_size=BATCH_SIZE, collate_fn=collate_fn)
   val_dataloader = DataLoader(val_iter, batch_size=BATCH_SIZE, collate_fn=collate_fn)
 
   model = translation.Seq2SeqTransformer(
     max_seq_len=MAX_SEQ_LEN,
-    src_vocab_size=src_vocab_size,
-    tgt_vocab_size=tgt_vocab_size,
+    src_vocab_size=len(vocab_transform[SRC_LANGUAGE]),
+    tgt_vocab_size=len(vocab_transform[TGT_LANGUAGE]),
     num_encoder_blocks=NUM_ENCODER_BLOCKS,
     num_decoder_blocks=NUM_DECODER_BLOCKS,
     embed_dim=EMBED_DIM,
