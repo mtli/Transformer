@@ -58,8 +58,8 @@ if __name__ == '__main__':
   model.load_state_dict(torch.load('seq2seq.pth'))
   model.eval()
   
-  print('Please input source language text:')
   while True:
+    print('Please input source language text:')
     text = input()
     output = translate(text_transform, vocab_transform, model, text, device)
     print(output)
