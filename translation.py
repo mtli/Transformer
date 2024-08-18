@@ -7,8 +7,9 @@ the PyTorch transformer tutorial [2]:
 2. It uses a shared source-target vocabulary.
 3. It shares the same weight matrix between the two embedding layers and the
    pre-softmax linear layer.
-4. It uses a batch-first layout.
-5. No longer using the deprecated torchdata for constructing datasets.
+4. It uses the learning rate schedule described in the paper.
+5. It uses a batch-first layout.
+6. No longer using the deprecated torchdata for constructing datasets.
 
 To prepare the datasets, check out the PyTorch translation tutorial [2].
 
@@ -19,103 +20,46 @@ References:
 [2] https://pytorch.org/tutorials/beginner/translation_transformer.html,
   retrieved on Aug 15, 2024.
 """
-
-from collections.abc import Iterable, Iterator, Callable
-
 import torch
 import torch.nn as nn
-from torch.nn.utils.rnn import pad_sequence
-from torchtext.data.utils import get_tokenizer
-from torchtext.vocab import build_vocab_from_iterator
 from torchtext.datasets import Multi30k
+from tokenizers import ByteLevelBPETokenizer
+from tokenizers.processors import BertProcessing
 
 from modules.model import Transformer
 from modules.pos_embed import PositionalEncoding
 from modules.token_embed import TokenEmbedding
 
-
 SRC_LANGUAGE = 'de'
 TGT_LANGUAGE = 'en'
+VOCAB_SIZE = 3000
 
 # Define special symbols and indices
 UNK_IDX, PAD_IDX, BOS_IDX, EOS_IDX = 0, 1, 2, 3
-# Make sure the tokens are in order of their indices to properly insert them in vocab
 special_symbols = ['<unk>', '<pad>', '<bos>', '<eos>']
   
   
-def preprocess() -> tuple:
-  token_transform = {
-    SRC_LANGUAGE: get_tokenizer('spacy', language='de_core_news_sm'),
-    TGT_LANGUAGE: get_tokenizer('spacy', language='en_core_web_sm'),
-  }
-  vocab_transform = {}
+def create_tokenizer() -> ByteLevelBPETokenizer:
+  tokenizer = ByteLevelBPETokenizer()
 
-  def yield_tokens(data_iter: Iterable, language: str) -> Iterator[str]:
-    language_index = {SRC_LANGUAGE: 0, TGT_LANGUAGE: 1}
+  train_iter = Multi30k(split='train', language_pair=(SRC_LANGUAGE, TGT_LANGUAGE))
+  src_sentences = [sample[0] for sample in train_iter]
+  tgt_sentences = [sample[1] for sample in train_iter]
+  tokenizer.train_from_iterator(
+      src_sentences + tgt_sentences,
+      vocab_size=VOCAB_SIZE,
+      min_frequency=1,
+      special_tokens=special_symbols,
+  )
+  tokenizer.post_processor = BertProcessing(("<bos>", BOS_IDX), ("<eos>", EOS_IDX))
+  
+  def encode_text(text):
+      return tokenizer.encode(text).ids
 
-    for data_sample in data_iter:
-      yield token_transform[language](data_sample[language_index[language]])
+  def decode_tokens(tokens, tokenizer):
+      return tokenizer.decode(tokens.tolist(), skip_special_tokens=True)
 
-  for ln in [SRC_LANGUAGE, TGT_LANGUAGE]:
-    train_iter = Multi30k(split='train', language_pair=(SRC_LANGUAGE, TGT_LANGUAGE))
-    # Create torchtext's Vocab object
-    vocab_transform[ln] = build_vocab_from_iterator(yield_tokens(train_iter, ln),
-                            min_freq=1,
-                            specials=special_symbols,
-                            special_first=True)
-    vocab_transform[ln].set_default_index(UNK_IDX)
-
-  def sequential_transforms(*transforms):
-    def func(txt_input):
-      for transform in transforms:
-        txt_input = transform(txt_input)
-      return txt_input
-    return func
-
-  # function to add BOS/EOS and create tensor for input sequence indices
-  def tensor_transform(token_ids: list[int]):
-    return torch.cat((torch.tensor([BOS_IDX]),
-              torch.tensor(token_ids),
-              torch.tensor([EOS_IDX])))
-
-  # ``src`` and ``tgt`` language text transforms to convert raw strings into tensors indices
-  text_transform = {}
-  for ln in [SRC_LANGUAGE, TGT_LANGUAGE]:
-    text_transform[ln] = sequential_transforms(token_transform[ln], #Tokenization
-                          vocab_transform[ln], #Numericalization
-                          tensor_transform) # Add BOS/EOS and create tensor
-
-
-  # function to collate data samples into batch tensors
-  def collate_fn(batch):
-    src_batch, tgt_batch = [], []
-    for src_sample, tgt_sample in batch:
-      src_batch.append(text_transform[SRC_LANGUAGE](src_sample.rstrip("\n")))
-      tgt_batch.append(text_transform[TGT_LANGUAGE](tgt_sample.rstrip("\n")))
-
-    src_batch = pad_sequence(src_batch, padding_value=PAD_IDX)
-    tgt_batch = pad_sequence(tgt_batch, padding_value=PAD_IDX)
-    return src_batch, tgt_batch
-
-  return text_transform, vocab_transform, collate_fn
-
-
-def generate_square_subsequent_mask(sz):
-  mask = (torch.triu(torch.ones((sz, sz))) == 1).transpose(0, 1)
-  mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-  return mask
-
-
-def create_mask(src, tgt):
-  src_seq_len = src.shape[1]
-  tgt_seq_len = tgt.shape[1]
-
-  tgt_mask = generate_square_subsequent_mask(tgt_seq_len)
-  src_mask = torch.zeros((src_seq_len, src_seq_len)).type(torch.bool)
-
-  src_padding_mask = (src == PAD_IDX).transpose(0, 1)
-  tgt_padding_mask = (tgt == PAD_IDX).transpose(0, 1)
-  return src_mask, tgt_mask, src_padding_mask, tgt_padding_mask
+  return tokenizer
 
 
 class Seq2SeqTransformer(nn.Module):
